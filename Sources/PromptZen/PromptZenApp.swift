@@ -9,7 +9,7 @@ struct PromptZenApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
-                .frame(minWidth: 920, minHeight: 560)
+                .frame(minWidth: 1240, minHeight: 560)
         }
         .defaultSize(width: 980, height: 620)
         .commands {

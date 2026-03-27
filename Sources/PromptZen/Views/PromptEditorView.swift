@@ -2,15 +2,23 @@ import AppKit
 import SwiftUI
 
 struct PromptEditorView: View {
+    @EnvironmentObject private var store: PromptStore
     @State private var title: String
-    @State private var category: String
+    @State private var mainCategory: String
+    @State private var subcategory: String
     @State private var displayedUpdatedAt: Date
     @State private var draftBodies: [ExpertiseLevel: String]
     @State private var savedBodies: [ExpertiseLevel: String]
     @State private var selectedLevel: ExpertiseLevel = .beginner
     @State private var savedTitle: String
-    @State private var savedCategory: String
+    @State private var savedMainCategory: String
+    @State private var savedSubcategory: String
     @State private var confirmDelete = false
+    @State private var isEditing = false
+    @State private var addMainPresented = false
+    @State private var addSubPresented = false
+    @State private var newMainName = ""
+    @State private var newSubName = ""
 
     private let promptID: UUID
     private let createdAt: Date
@@ -29,10 +37,19 @@ struct PromptEditorView: View {
         TokenEstimator.estimateTokens(for: draftBodies[selectedLevel] ?? "")
     }
 
+    private var liveFavorite: Bool {
+        store.prompts.first(where: { $0.id == promptID })?.isFavorite ?? false
+    }
+
+    private var draftTaxonomyLine: String {
+        "\(LibraryTaxonomy.normalizeMain(mainCategory)) › \(LibraryTaxonomy.normalizeSub(subcategory))"
+    }
+
     private var isDirty: Bool {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let c = category.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t != savedTitle || c != savedCategory { return true }
+        let m = LibraryTaxonomy.normalizeMain(mainCategory)
+        let s = LibraryTaxonomy.normalizeSub(subcategory)
+        if t != savedTitle || m != savedMainCategory || s != savedSubcategory { return true }
         return ExpertiseLevel.allCases.contains { level in
             (draftBodies[level] ?? "") != (savedBodies[level] ?? "")
         }
@@ -42,15 +59,18 @@ struct PromptEditorView: View {
         promptID = prompt.id
         createdAt = prompt.createdAt
         let initialTitle = prompt.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let initialCategory = prompt.category.trimmingCharacters(in: .whitespacesAndNewlines)
+        let m = prompt.normalizedMainCategory
+        let s = prompt.normalizedSubcategory
         let bodiesSnapshot = Dictionary(uniqueKeysWithValues: ExpertiseLevel.allCases.map { ($0, prompt.text(for: $0)) })
         _title = State(initialValue: prompt.title)
-        _category = State(initialValue: prompt.category)
+        _mainCategory = State(initialValue: prompt.mainCategory)
+        _subcategory = State(initialValue: prompt.subcategory)
         _displayedUpdatedAt = State(initialValue: prompt.updatedAt)
         _draftBodies = State(initialValue: bodiesSnapshot)
         _savedBodies = State(initialValue: bodiesSnapshot)
         _savedTitle = State(initialValue: initialTitle)
-        _savedCategory = State(initialValue: initialCategory)
+        _savedMainCategory = State(initialValue: m)
+        _savedSubcategory = State(initialValue: s)
         self.onSave = onSave
         self.onDelete = onDelete
         self.onDuplicate = onDuplicate
@@ -60,15 +80,52 @@ struct PromptEditorView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 labeledField("Prompt") {
-                    TextField("Title", text: $title)
-                        .textFieldStyle(.roundedBorder)
-                        .promptZenActivateOnTap()
-                    TextField("Category", text: $category)
-                        .textFieldStyle(.roundedBorder)
-                        .promptZenActivateOnTap()
-                    Text("Examples: Feature, Debug, Maintenance, Refactor, Testing, Review, Docs, Security, DX")
+                    if isEditing {
+                        TextField("Title", text: $title)
+                            .textFieldStyle(.roundedBorder)
+                            .promptZenActivateOnTap()
+
+                        Picker("Main category", selection: $mainCategory) {
+                            ForEach(store.allMainCategoriesOrdered, id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                        }
+                        .onChange(of: mainCategory) { _, _ in
+                            let subs = store.subcategories(for: mainCategory)
+                            if !subs.contains(where: { $0.caseInsensitiveCompare(subcategory) == .orderedSame }) {
+                                subcategory = subs.first ?? LibraryTaxonomy.fallbackSub
+                            }
+                        }
+
+                        Picker("Subcategory", selection: $subcategory) {
+                            ForEach(store.subcategories(for: mainCategory), id: \.self) { name in
+                                Text(name).tag(name)
+                            }
+                        }
+
+                        HStack(spacing: 12) {
+                            Button("New main category…") {
+                                newMainName = ""
+                                addMainPresented = true
+                            }
+                            .buttonStyle(.borderless)
+
+                            Button("New subcategory…") {
+                                newSubName = ""
+                                addSubPresented = true
+                            }
+                            .buttonStyle(.borderless)
+                        }
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                    } else {
+                        Text(title.isEmpty ? "Untitled" : title)
+                            .font(.title2.weight(.semibold))
+                            .textSelection(.enabled)
+                        Text(draftTaxonomyLine)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -88,39 +145,57 @@ struct PromptEditorView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
-                    TextEditor(text: bodyBinding)
-                        .font(.body)
+                    if isEditing {
+                        TextEditor(text: bodyBinding)
+                            .font(.body)
+                            .frame(minHeight: 280)
+                            .padding(6)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                            )
+                            .promptZenActivateOnTap()
+                    } else {
+                        ScrollView {
+                            Text(draftBodies[selectedLevel] ?? "")
+                                .font(.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
                         .frame(minHeight: 280)
-                        .padding(6)
+                        .padding(10)
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .textBackgroundColor)))
                         .overlay(
                             RoundedRectangle(cornerRadius: 6)
                                 .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
                         )
-                        .promptZenActivateOnTap()
+                    }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Quick enhance")
-                        .font(.headline)
-                    HStack(spacing: 10) {
-                        Button("Trim edges") {
-                            let key = selectedLevel
-                            draftBodies[key] = PromptEnhancer.trimWhitespace(draftBodies[key] ?? "")
-                            persist()
+                if isEditing {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Quick enhance")
+                            .font(.headline)
+                        HStack(spacing: 10) {
+                            Button("Trim edges") {
+                                let key = selectedLevel
+                                draftBodies[key] = PromptEnhancer.trimWhitespace(draftBodies[key] ?? "")
+                                persist()
+                            }
+                            Button("Strip trailing space") {
+                                let key = selectedLevel
+                                draftBodies[key] = PromptEnhancer.stripTrailingWhitespacePerLine(draftBodies[key] ?? "")
+                                persist()
+                            }
+                            Button("Collapse blank lines") {
+                                let key = selectedLevel
+                                draftBodies[key] = PromptEnhancer.collapseBlankLines(draftBodies[key] ?? "")
+                                persist()
+                            }
                         }
-                        Button("Strip trailing space") {
-                            let key = selectedLevel
-                            draftBodies[key] = PromptEnhancer.stripTrailingWhitespacePerLine(draftBodies[key] ?? "")
-                            persist()
-                        }
-                        Button("Collapse blank lines") {
-                            let key = selectedLevel
-                            draftBodies[key] = PromptEnhancer.collapseBlankLines(draftBodies[key] ?? "")
-                            persist()
-                        }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
-                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Divider()
@@ -171,8 +246,39 @@ struct PromptEditorView: View {
             }
         }
         .navigationTitle(title.isEmpty ? "Untitled" : title)
+        .alert("New main category", isPresented: $addMainPresented) {
+            TextField("Name", text: $newMainName)
+            Button("Add") {
+                store.addMainCategory(newMainName)
+                mainCategory = newMainName.trimmingCharacters(in: .whitespacesAndNewlines)
+                newMainName = ""
+            }
+            Button("Cancel", role: .cancel) { newMainName = "" }
+        } message: {
+            Text("It will appear in the Library sidebar and in this picker.")
+        }
+        .alert("New subcategory", isPresented: $addSubPresented) {
+            TextField("Name", text: $newSubName)
+            Button("Add") {
+                let name = newSubName.trimmingCharacters(in: .whitespacesAndNewlines)
+                store.addSubcategory(to: mainCategory, name: name)
+                subcategory = name
+                newSubName = ""
+            }
+            Button("Cancel", role: .cancel) { newSubName = "" }
+        } message: {
+            Text("Under “\(LibraryTaxonomy.normalizeMain(mainCategory))”.")
+        }
         .toolbar {
-            if isDirty {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    store.toggleFavorite(id: promptID)
+                } label: {
+                    Image(systemName: liveFavorite ? "star.fill" : "star")
+                }
+                .help(liveFavorite ? "Remove from favorites" : "Add to favorites")
+            }
+            if isEditing, isDirty {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         persist()
@@ -181,6 +287,18 @@ struct PromptEditorView: View {
                 }
             }
             ToolbarItemGroup(placement: .primaryAction) {
+                if isEditing {
+                    Button("Done") {
+                        if isDirty {
+                            persist()
+                        }
+                        isEditing = false
+                    }
+                } else {
+                    Button("Edit") {
+                        isEditing = true
+                    }
+                }
                 Menu {
                     Button("Copy body (\(selectedLevel.displayName))") {
                         IDEExport.copyPlain(draftBodies[selectedLevel] ?? "")
@@ -188,7 +306,7 @@ struct PromptEditorView: View {
                     Button("Copy with IDE header (\(selectedLevel.displayName))") {
                         IDEExport.copyWithIDEHeader(
                             title: title.isEmpty ? "Untitled" : title,
-                            category: category.isEmpty ? "Uncategorized" : category,
+                            category: draftTaxonomyLine,
                             body: draftBodies[selectedLevel] ?? ""
                         )
                     }
@@ -247,19 +365,24 @@ struct PromptEditorView: View {
     private func persist() {
         let now = Date()
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let c = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        let m = LibraryTaxonomy.normalizeMain(mainCategory)
+        let s = LibraryTaxonomy.normalizeSub(subcategory)
+        let fav = store.prompts.first(where: { $0.id == promptID })?.isFavorite ?? false
         let p = Prompt(
             id: promptID,
             title: t,
             bodies: draftBodies,
-            category: c,
+            mainCategory: m,
+            subcategory: s,
+            isFavorite: fav,
             createdAt: createdAt,
             updatedAt: now
         )
         onSave(p)
         displayedUpdatedAt = now
         savedTitle = t
-        savedCategory = c
+        savedMainCategory = m
+        savedSubcategory = s
         savedBodies = Dictionary(uniqueKeysWithValues: ExpertiseLevel.allCases.map { ($0, draftBodies[$0] ?? "") })
     }
 }

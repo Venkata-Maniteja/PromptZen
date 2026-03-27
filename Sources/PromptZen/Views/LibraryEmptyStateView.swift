@@ -8,12 +8,12 @@ struct LibraryEmptyStateView: View {
             Label("Your library is empty", systemImage: "text.book.closed")
                 .symbolRenderingMode(.hierarchical)
         } description: {
-            Text("Create a prompt to organize by category, estimate tokens in the playground, and copy into your editor.")
+            Text("Create a prompt under a main category and subcategory, estimate tokens in the playground, and copy into your editor.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
         } actions: {
             Button {
-                creatorDraft = Prompt.emptyForNew(category: "")
+                creatorDraft = Prompt.emptyForNew()
                 PromptZenAppActivation.activateKeyWindowHierarchy()
             } label: {
                 Label("New Prompt", systemImage: "plus.circle.fill")

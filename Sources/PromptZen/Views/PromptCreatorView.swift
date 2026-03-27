@@ -2,15 +2,21 @@ import AppKit
 import SwiftUI
 
 struct PromptCreatorView: View {
+    @EnvironmentObject private var store: PromptStore
     let initial: Prompt
     let onSave: (Prompt) -> Void
     let onCancel: () -> Void
 
     @State private var title: String
-    @State private var category: String
+    @State private var mainCategory: String
+    @State private var subcategory: String
     @State private var draftBodies: [ExpertiseLevel: String]
     @State private var selectedLevel: ExpertiseLevel = .beginner
     @FocusState private var titleFocused: Bool
+    @State private var addMainPresented = false
+    @State private var addSubPresented = false
+    @State private var newMainName = ""
+    @State private var newSubName = ""
 
     private var bodyBinding: Binding<String> {
         Binding(
@@ -32,7 +38,8 @@ struct PromptCreatorView: View {
         self.onSave = onSave
         self.onCancel = onCancel
         _title = State(initialValue: initial.title)
-        _category = State(initialValue: initial.category)
+        _mainCategory = State(initialValue: initial.mainCategory)
+        _subcategory = State(initialValue: initial.subcategory)
         _draftBodies = State(
             initialValue: Dictionary(uniqueKeysWithValues: ExpertiseLevel.allCases.map { ($0, initial.text(for: $0)) })
         )
@@ -47,13 +54,37 @@ struct PromptCreatorView: View {
                         .focused($titleFocused)
                         .promptZenActivateOnTap()
                 }
-                labeledField("Category") {
-                    TextField("Category", text: $category)
-                        .textFieldStyle(.roundedBorder)
-                        .promptZenActivateOnTap()
-                    Text("Examples: Feature, Debug, Maintenance, Refactor, Testing, Review, Docs, Security, DX")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                labeledField("Taxonomy") {
+                    Picker("Main category", selection: $mainCategory) {
+                        ForEach(store.allMainCategoriesOrdered, id: \.self) { name in
+                            Text(name).tag(name)
+                        }
+                    }
+                    .onChange(of: mainCategory) { _, _ in
+                        let subs = store.subcategories(for: mainCategory)
+                        if !subs.contains(where: { $0.caseInsensitiveCompare(subcategory) == .orderedSame }) {
+                            subcategory = subs.first ?? LibraryTaxonomy.fallbackSub
+                        }
+                    }
+
+                    Picker("Subcategory", selection: $subcategory) {
+                        ForEach(store.subcategories(for: mainCategory), id: \.self) { name in
+                            Text(name).tag(name)
+                        }
+                    }
+
+                    HStack(spacing: 12) {
+                        Button("New main category…") {
+                            newMainName = ""
+                            addMainPresented = true
+                        }
+                        Button("New subcategory…") {
+                            newSubName = ""
+                            addSubPresented = true
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -101,6 +132,29 @@ struct PromptCreatorView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("New Prompt")
+        .alert("New main category", isPresented: $addMainPresented) {
+            TextField("Name", text: $newMainName)
+            Button("Add") {
+                store.addMainCategory(newMainName)
+                mainCategory = newMainName.trimmingCharacters(in: .whitespacesAndNewlines)
+                newMainName = ""
+            }
+            Button("Cancel", role: .cancel) { newMainName = "" }
+        } message: {
+            Text("It will appear in the Library sidebar and in this picker.")
+        }
+        .alert("New subcategory", isPresented: $addSubPresented) {
+            TextField("Name", text: $newSubName)
+            Button("Add") {
+                let name = newSubName.trimmingCharacters(in: .whitespacesAndNewlines)
+                store.addSubcategory(to: mainCategory, name: name)
+                subcategory = name
+                newSubName = ""
+            }
+            Button("Cancel", role: .cancel) { newSubName = "" }
+        } message: {
+            Text("Under “\(LibraryTaxonomy.normalizeMain(mainCategory))”.")
+        }
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel", action: onCancel)
@@ -108,12 +162,15 @@ struct PromptCreatorView: View {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
                     let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let c = category.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let m = LibraryTaxonomy.normalizeMain(mainCategory)
+                    let s = LibraryTaxonomy.normalizeSub(subcategory)
                     let p = Prompt(
                         id: initial.id,
                         title: t,
                         bodies: draftBodies,
-                        category: c,
+                        mainCategory: m,
+                        subcategory: s,
+                        isFavorite: false,
                         createdAt: initial.createdAt,
                         updatedAt: Date()
                     )

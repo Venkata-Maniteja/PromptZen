@@ -1,27 +1,45 @@
 import Foundation
 
-/// Suggested category labels (user-editable): Feature, Debug, Maintenance, Refactor, Testing, Review, Docs, Security, DX.
-/// Use stack-agnostic placeholders like `[path]`, `[error]` in prompt bodies.
+/// Prompts use main + sub taxonomy; use stack-agnostic placeholders like `[path]`, `[error]` in bodies.
 struct Prompt: Identifiable, Hashable {
     var id: UUID
     var title: String
     /// One string per expertise level; always contains keys for beginner, senior, staff.
     var bodies: [ExpertiseLevel: String]
-    var category: String
+    var mainCategory: String
+    var subcategory: String
+    var isFavorite: Bool
     var createdAt: Date
     var updatedAt: Date
+
+    var normalizedMainCategory: String {
+        LibraryTaxonomy.normalizeMain(mainCategory)
+    }
+
+    var normalizedSubcategory: String {
+        LibraryTaxonomy.normalizeSub(subcategory)
+    }
+
+    /// Single line for IDE export / search.
+    var taxonomyDisplayLine: String {
+        "\(normalizedMainCategory) › \(normalizedSubcategory)"
+    }
 
     init(
         id: UUID = UUID(),
         title: String,
         bodies: [ExpertiseLevel: String] = [:],
-        category: String,
+        mainCategory: String,
+        subcategory: String,
+        isFavorite: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
         self.id = id
         self.title = title
-        self.category = category
+        self.mainCategory = mainCategory
+        self.subcategory = subcategory
+        self.isFavorite = isFavorite
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         var merged: [ExpertiseLevel: String] = Dictionary(uniqueKeysWithValues: ExpertiseLevel.allCases.map { ($0, "") })
@@ -51,8 +69,11 @@ struct Prompt: Identifiable, Hashable {
         ExpertiseLevel.allCases.allSatisfy { text(for: $0).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
-    static func emptyForNew(category: String = "") -> Prompt {
-        Prompt(title: "", bodies: [:], category: category)
+    static func emptyForNew(
+        mainCategory: String = LibraryTaxonomy.fallbackMain,
+        subcategory: String = LibraryTaxonomy.fallbackSub
+    ) -> Prompt {
+        Prompt(title: "", bodies: [:], mainCategory: mainCategory, subcategory: subcategory, isFavorite: false)
     }
 }
 
@@ -60,20 +81,38 @@ extension Prompt: Codable {
     enum CodingKeys: String, CodingKey {
         case id
         case title
-        case category
+        case mainCategory
+        case subcategory
+        case isFavorite
         case createdAt
         case updatedAt
         case body
         case bodies
+        case category
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
-        category = try c.decode(String.self, forKey: .category)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+
+        let decMain = try c.decodeIfPresent(String.self, forKey: .mainCategory)
+        let decSub = try c.decodeIfPresent(String.self, forKey: .subcategory)
+        if decMain != nil || decSub != nil {
+            mainCategory = LibraryTaxonomy.normalizeMain(decMain ?? "")
+            subcategory = LibraryTaxonomy.normalizeSub(decSub ?? "")
+            isFavorite = try c.decodeIfPresent(Bool.self, forKey: .isFavorite) ?? false
+        } else if let legacyCat = try c.decodeIfPresent(String.self, forKey: .category) {
+            mainCategory = LibraryTaxonomy.fallbackMain
+            subcategory = legacyCat
+            isFavorite = false
+        } else {
+            mainCategory = LibraryTaxonomy.fallbackMain
+            subcategory = LibraryTaxonomy.fallbackSub
+            isFavorite = false
+        }
 
         if let decoded = try c.decodeIfPresent([ExpertiseLevel: String].self, forKey: .bodies) {
             var merged: [ExpertiseLevel: String] = Dictionary(uniqueKeysWithValues: ExpertiseLevel.allCases.map { ($0, "") })
@@ -94,7 +133,9 @@ extension Prompt: Codable {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(title, forKey: .title)
-        try c.encode(category, forKey: .category)
+        try c.encode(mainCategory, forKey: .mainCategory)
+        try c.encode(subcategory, forKey: .subcategory)
+        try c.encode(isFavorite, forKey: .isFavorite)
         try c.encode(createdAt, forKey: .createdAt)
         try c.encode(updatedAt, forKey: .updatedAt)
         try c.encode(bodies, forKey: .bodies)
