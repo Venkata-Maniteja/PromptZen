@@ -52,7 +52,11 @@ struct PlaygroundView: View {
     @AppStorage("PromptZen.nvidiaNIMModel") private var nvidiaNIMModel: String = "meta/llama-3.1-8b-instruct"
 
     @StateObject private var chatSession = PlaygroundChatSession()
+    @StateObject private var tunnelConnect = PlaygroundTunnelConnectViewModel()
     @State private var playgroundText: String = ""
+
+    @AppStorage("PromptZen.tunnelLocalPort") private var tunnelLocalPort: String = "8787"
+    @AppStorage("PromptZen.ngrokExecutablePath") private var ngrokExecutablePath: String = ""
 
     private var selectedProviderBinding: Binding<PlaygroundAIProviderKind> {
         Binding(
@@ -262,12 +266,19 @@ struct PlaygroundView: View {
                 .font(.headline)
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
+            Text("Green: at least one successful run. Red: last run failed.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 12)
                 .padding(.bottom, 6)
 
             List(selection: selectedProviderBinding) {
                 ForEach(PlaygroundAIProviderKind.allCases) { kind in
-                    Label(kind.displayName, systemImage: kind.symbolName)
-                        .tag(kind)
+                    HStack(spacing: 8) {
+                        providerRunStatusDot(chatSession.statusDot(for: kind))
+                        Label(kind.displayName, systemImage: kind.symbolName)
+                    }
+                    .tag(kind)
                 }
             }
             .listStyle(.sidebar)
@@ -276,6 +287,29 @@ struct PlaygroundView: View {
             Spacer(minLength: 0)
         }
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.35))
+    }
+
+    @ViewBuilder
+    private func providerRunStatusDot(_ status: PlaygroundProviderStatusDot) -> some View {
+        switch status {
+        case .none:
+            Circle()
+                .fill(Color.clear)
+                .frame(width: 9, height: 9)
+                .accessibilityHidden(true)
+        case .verified:
+            Circle()
+                .fill(Color(nsColor: .systemGreen))
+                .frame(width: 9, height: 9)
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .accessibilityLabel("At least one successful run")
+        case .lastFailed:
+            Circle()
+                .fill(Color(nsColor: .systemRed))
+                .frame(width: 9, height: 9)
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                .accessibilityLabel("Last run failed")
+        }
     }
 
     private var providerSettingsSidebar: some View {
@@ -367,9 +401,8 @@ struct PlaygroundView: View {
     private var groqSettings: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("Groq")
-            Text("[Console](https://console.groq.com/) · OpenAI-compatible base baked in.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Link("Groq console", destination: URL(string: "https://console.groq.com/")!)
+                .font(.caption)
             SecureField("API key", text: $groqAPIKey).textFieldStyle(.roundedBorder)
             TextField("Model id", text: $groqModel).textFieldStyle(.roundedBorder)
             Text("Env: GROQ_API_KEY").font(.caption2).foregroundStyle(.tertiary)
@@ -413,9 +446,8 @@ struct PlaygroundView: View {
     private var zenSettings: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("OpenCode Zen")
-            Text("[Zen docs](https://opencode.ai/docs/zen/) — free models use `…/v1/chat/completions`.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Link("OpenCode Zen docs", destination: URL(string: "https://opencode.ai/docs/zen/")!)
+                .font(.caption)
             SecureField("API key", text: $openCodeZenAPIKey).textFieldStyle(.roundedBorder)
             TextField("Model id (chat/completions route)", text: $openCodeZenModel).textFieldStyle(.roundedBorder)
             Text("Env: OPENCODE_API_KEY").font(.caption2).foregroundStyle(.tertiary)
@@ -436,9 +468,8 @@ struct PlaygroundView: View {
     private var cohereSettings: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("Cohere")
-            Text("[Chat v2](https://docs.cohere.com/v2/docs/chat-api)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Link("Cohere Chat v2", destination: URL(string: "https://docs.cohere.com/v2/docs/chat-api")!)
+                .font(.caption)
             SecureField("API key", text: $cohereAPIKey).textFieldStyle(.roundedBorder)
             TextField("Model id", text: $cohereModel).textFieldStyle(.roundedBorder)
             Text("Env: COHERE_API_KEY").font(.caption2).foregroundStyle(.tertiary)
@@ -459,9 +490,8 @@ struct PlaygroundView: View {
     private var cloudflareSettings: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionTitle("Cloudflare Workers AI")
-            Text("[OpenAI compatibility](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Link("Cloudflare Workers AI (OpenAI compat)", destination: URL(string: "https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/")!)
+                .font(.caption)
             TextField("Account ID", text: $cloudflareAccountId).textFieldStyle(.roundedBorder)
             SecureField("API token", text: $cloudflareAPIToken).textFieldStyle(.roundedBorder)
             TextField("Model id (@cf/…)", text: $cloudflareModel).textFieldStyle(.roundedBorder)
@@ -485,6 +515,122 @@ struct PlaygroundView: View {
         Text(s).font(.headline)
     }
 
+    private var webTunnelSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Serves a chat page on this Mac (loopback) and on your LAN when connected. Use the LAN URL on an iPhone on the same Wi‑Fi. ngrok adds a public URL when it works. Requests use the Playground provider and keys from this Mac.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    TextField("Local port", text: $tunnelLocalPort)
+                        .frame(width: 92)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(tunnelConnect.isConnected)
+                    TextField("ngrok executable path (optional)", text: $ngrokExecutablePath)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(tunnelConnect.isConnected)
+                }
+                HStack(spacing: 12) {
+                    if !tunnelConnect.isConnected {
+                        Button {
+                            Task {
+                                await tunnelConnect.connect(
+                                    portString: tunnelLocalPort,
+                                    ngrokExecutablePath: ngrokExecutablePath
+                                )
+                            }
+                        } label: {
+                            Label("Connect", systemImage: "link.badge.plus")
+                        }
+                        .disabled(tunnelConnect.isBusy || chatSession.isRunning)
+                    }
+                    if tunnelConnect.isConnected {
+                        Button {
+                            Task { await tunnelConnect.disconnect() }
+                        } label: {
+                            Label("Disconnect", systemImage: "link.badge.minus")
+                        }
+                    }
+                }
+                tunnelStatusBlock
+            }
+        } label: {
+            Label("Web tunnel", systemImage: "cable.connector")
+        }
+    }
+
+    @ViewBuilder
+    private var tunnelStatusBlock: some View {
+        switch tunnelConnect.phase {
+        case .disconnected:
+            EmptyView()
+        case .busy(let message):
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let err):
+            Text(err)
+                .font(.caption)
+                .foregroundStyle(.red)
+        case .connected(let local, let lanURL, let publicURL, let tunnelWarning):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("This Mac only").font(.caption).foregroundStyle(.secondary)
+                        Text(local).font(.caption).textSelection(.enabled)
+                    }
+                    Button("Copy") { copyToPasteboard(local) }
+                        .controlSize(.small)
+                }
+                if let lan = lanURL, !lan.isEmpty {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Same Wi‑Fi (iPhone, iPad, etc.)").font(.caption).foregroundStyle(.secondary)
+                            Text(lan).font(.caption).textSelection(.enabled)
+                        }
+                        Button("Copy") { copyToPasteboard(lan) }
+                            .controlSize(.small)
+                    }
+                }
+                if let pub = publicURL, !pub.isEmpty {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Public URL (ngrok)").font(.caption).foregroundStyle(.secondary)
+                            Text(pub).font(.caption).textSelection(.enabled)
+                        }
+                        Button("Copy") { copyToPasteboard(pub) }
+                            .controlSize(.small)
+                    }
+                }
+                if let warn = tunnelWarning, !warn.isEmpty {
+                    Text(warn)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+                if !tunnelConnect.tunnelSecret.isEmpty {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Tunnel secret (Authorization: Bearer …)").font(.caption).foregroundStyle(.secondary)
+                            Text(tunnelConnect.tunnelSecret)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        Button("Copy") { copyToPasteboard(tunnelConnect.tunnelSecret) }
+                            .controlSize(.small)
+                    }
+                }
+                Text("Open a URL in a browser on that device. If the phone cannot connect, confirm same Wi‑Fi and allow PromptZen in macOS Firewall. POST /chat requires the secret. Disconnect stops the server and ngrok.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func copyToPasteboard(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+    }
+
     private var editorPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -498,6 +644,9 @@ struct PlaygroundView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
+
+                webTunnelSection
+                    .padding(.horizontal, 16)
 
                 TextEditor(text: $playgroundText)
                     .font(.body)

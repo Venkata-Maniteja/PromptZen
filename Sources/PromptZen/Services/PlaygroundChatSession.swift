@@ -7,8 +7,18 @@ final class PlaygroundChatSession: ObservableObject {
     @Published private(set) var statusLine: String = ""
     @Published private(set) var isRunning: Bool = false
     @Published private(set) var usedProviderSummary: String?
+    /// Per-provider Run chat health for the sidebar dots.
+    @Published private(set) var providerStatusByKind: [PlaygroundAIProviderKind: PlaygroundProviderStatusDot]
 
     private var pendingTask: Task<Void, Never>?
+
+    init() {
+        providerStatusByKind = PlaygroundProviderHealthPersistence.loadStatusMap()
+    }
+
+    func statusDot(for kind: PlaygroundAIProviderKind) -> PlaygroundProviderStatusDot {
+        providerStatusByKind[kind] ?? .none
+    }
 
     func cancel() {
         pendingTask?.cancel()
@@ -21,6 +31,7 @@ final class PlaygroundChatSession: ObservableObject {
 
     func run(prompt: String, configuration: PlaygroundChatConfiguration) {
         pendingTask?.cancel()
+        let provider = configuration.provider
         pendingTask = Task { @MainActor in
             let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
@@ -42,10 +53,14 @@ final class PlaygroundChatSession: ObservableObject {
                 responseText = result.text
                 usedProviderSummary = "Model: \(result.usedProviderDisplayName)"
                 statusLine = "Done."
+                providerStatusByKind = PlaygroundProviderHealthPersistence.recordSuccess(for: provider)
             } catch is CancellationError {
+                statusLine = "Cancelled."
+            } catch let urlError as URLError where urlError.code == .cancelled {
                 statusLine = "Cancelled."
             } catch {
                 statusLine = error.localizedDescription
+                providerStatusByKind = PlaygroundProviderHealthPersistence.recordFailure(for: provider)
             }
 
             isRunning = false
